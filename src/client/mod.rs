@@ -35,9 +35,8 @@ impl Client {
 mod schema {}
 
 #[derive(cynic::QueryFragment, Debug)]
-pub struct Book {
-    pub title: String,
-    pub summary: String,
+pub struct Library {
+    pub authors: Vec<Author>,
 }
 
 #[derive(cynic::QueryFragment, Debug)]
@@ -48,7 +47,7 @@ pub struct Author {
 }
 
 #[derive(cynic::QueryFragment, Debug)]
-#[cynic(graphql_type = "Library")]
-pub struct Library {
-    pub authors: Vec<Author>,
+pub struct Book {
+    pub title: String,
+    pub summary: String,
 }

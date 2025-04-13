@@ -3,6 +3,26 @@ use tokio::task::yield_now;
 
 use crate::datamodel::{ALL_AUTHORS, ALL_BOOKS};
 
+pub struct Library;
+
+#[Object]
+impl Library {
+    async fn authors(&self, _ctx: &Context<'_>) -> Vec<Author> {
+        println!("starting to resolve authors");
+
+        let authors = ALL_AUTHORS
+            .iter()
+            .map(|a| Author {
+                name: a.name,
+                born: a.born,
+            })
+            .collect();
+
+        println!("finished resolving authors");
+        authors
+    }
+}
+
 #[derive(SimpleObject)]
 #[graphql(complex)]
 pub struct Author {
@@ -13,8 +33,9 @@ pub struct Author {
 #[ComplexObject]
 impl Author {
     async fn books(&self, _ctx: &Context<'_>) -> Vec<Book> {
-        println!("resolving Books by `{}`", self.name);
-        // yield_now().await;
+        println!("starting to resolve Books by `{}`", self.name);
+        yield_now().await;
+        println!("actually resolving Books by `{}`", self.name);
 
         let books = ALL_BOOKS
             .iter()
@@ -36,27 +57,13 @@ pub struct Book {
 #[ComplexObject]
 impl Book {
     async fn summary(&self, _ctx: &Context<'_>) -> String {
-        println!("resolving summary for `{}`", self.title);
-        // yield_now().await;
+        println!("starting to resolve summary for `{}`", self.title);
+        yield_now().await;
+        println!("actually resolving summary for `{}`", self.title);
 
         let summary = "Don’t know, read it yourself!".into();
 
         println!("finished resolving summary for `{}`", self.title);
         summary
-    }
-}
-
-pub struct Library;
-
-#[Object]
-impl Library {
-    async fn authors(&self, _ctx: &Context<'_>) -> Vec<Author> {
-        ALL_AUTHORS
-            .iter()
-            .map(|a| Author {
-                name: a.name,
-                born: a.born,
-            })
-            .collect()
     }
 }
