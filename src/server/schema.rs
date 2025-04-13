@@ -1,33 +1,62 @@
 use async_graphql::{ComplexObject, Context, Object, SimpleObject};
 use tokio::task::yield_now;
 
+use crate::datamodel::{ALL_AUTHORS, ALL_BOOKS};
+
 #[derive(SimpleObject)]
 #[graphql(complex)]
-pub struct Parent {
-    id: usize,
+pub struct Author {
+    name: &'static str,
+    born: &'static str,
 }
 
 #[ComplexObject]
-impl Parent {
-    async fn children(&self, _ctx: &Context<'_>) -> Vec<Child> {
-        println!("resolving children of {}", self.id);
-        yield_now().await;
-        println!("finished resolving children of {}", self.id);
+impl Author {
+    async fn books(&self, _ctx: &Context<'_>) -> Vec<Book> {
+        println!("resolving Books by `{}`", self.name);
+        // yield_now().await;
 
-        vec![]
+        let books = ALL_BOOKS
+            .iter()
+            .filter(|b| b.author == self.name)
+            .map(|b| Book { title: b.title })
+            .collect();
+
+        println!("finished resolving Books by `{}`", self.name);
+        books
     }
 }
 
 #[derive(SimpleObject)]
-pub struct Child {
-    id: usize,
+#[graphql(complex)]
+pub struct Book {
+    title: &'static str,
 }
 
-pub struct RootQuery;
+#[ComplexObject]
+impl Book {
+    async fn summary(&self, _ctx: &Context<'_>) -> String {
+        println!("resolving summary for `{}`", self.title);
+        // yield_now().await;
+
+        let summary = "Don’t know, read it yourself!".into();
+
+        println!("finished resolving summary for `{}`", self.title);
+        summary
+    }
+}
+
+pub struct Library;
 
 #[Object]
-impl RootQuery {
-    async fn parents(&self, _ctx: &Context<'_>) -> Vec<Parent> {
-        (0..4).map(|id| Parent { id }).collect()
+impl Library {
+    async fn authors(&self, _ctx: &Context<'_>) -> Vec<Author> {
+        ALL_AUTHORS
+            .iter()
+            .map(|a| Author {
+                name: a.name,
+                born: a.born,
+            })
+            .collect()
     }
 }

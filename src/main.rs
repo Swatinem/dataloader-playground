@@ -3,7 +3,9 @@
 use server::make_app;
 
 mod client;
+mod datamodel;
 mod server;
+
 #[cfg(test)]
 mod tests;
 

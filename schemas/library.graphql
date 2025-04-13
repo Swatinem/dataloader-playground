@@ -1,0 +1,18 @@
+schema {
+  query: Library
+}
+type Author {
+  name: String!
+  born: String!
+  books: [Book!]!
+}
+
+type Book {
+  title: String!
+  summary: String!
+}
+
+type Library {
+  authors: [Author!]!
+}
+

@@ -31,22 +31,24 @@ impl Client {
     }
 }
 
-#[cynic::schema("loader")]
+#[cynic::schema("library")]
 mod schema {}
 
 #[derive(cynic::QueryFragment, Debug)]
-pub struct Child {
-    pub id: i32,
+pub struct Book {
+    pub title: String,
+    pub summary: String,
 }
 
 #[derive(cynic::QueryFragment, Debug)]
-pub struct Parent {
-    pub id: i32,
-    pub children: Vec<Child>,
+pub struct Author {
+    pub name: String,
+    pub born: String,
+    pub books: Vec<Book>,
 }
 
 #[derive(cynic::QueryFragment, Debug)]
-#[cynic(graphql_type = "RootQuery")]
-pub struct RootQuery {
-    pub parents: Vec<Parent>,
+#[cynic(graphql_type = "Library")]
+pub struct Library {
+    pub authors: Vec<Author>,
 }

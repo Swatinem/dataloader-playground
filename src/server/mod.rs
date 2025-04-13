@@ -8,9 +8,9 @@ use axum::routing::get;
 
 mod schema;
 
-use schema::RootQuery;
+use schema::Library;
 
-type FullSchema = Schema<RootQuery, EmptyMutation, EmptySubscription>;
+type FullSchema = Schema<Library, EmptyMutation, EmptySubscription>;
 
 async fn graphiql() -> impl IntoResponse {
     Html(GraphiQLSource::build().finish())
@@ -24,7 +24,7 @@ async fn graphql_handler(State(schema): State<FullSchema>, req: GraphQLRequest) 
 }
 
 pub fn make_app() -> Router {
-    let schema = Schema::build(RootQuery, EmptyMutation, EmptySubscription).finish();
+    let schema = Schema::build(Library, EmptyMutation, EmptySubscription).finish();
     // std::fs::write("schemas/loader.graphql", schema.sdl()).unwrap();
 
     Router::new()
