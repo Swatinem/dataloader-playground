@@ -1,0 +1,15 @@
+[package]
+name = "dataloader"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-graphql = { version = "7.0.16", features = ["graphiql"] }
+async-graphql-axum = "7.0.16"
+axum = "0.8.3"
+cynic = { version = "3.10.0", features = ["http-reqwest"] }
+reqwest = { version = "0.12.15", features = ["json"] }
+tokio = { version = "1.44.2", features = ["full"] }
+
+[build-dependencies]
+cynic-codegen = "3.10.0"

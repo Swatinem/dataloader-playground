@@ -1,0 +1,33 @@
+use async_graphql::http::GraphiQLSource;
+use async_graphql::{EmptyMutation, EmptySubscription, Schema};
+use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
+use axum::Router;
+use axum::extract::State;
+use axum::response::{Html, IntoResponse};
+use axum::routing::get;
+
+mod schema;
+
+use schema::RootQuery;
+
+type FullSchema = Schema<RootQuery, EmptyMutation, EmptySubscription>;
+
+async fn graphiql() -> impl IntoResponse {
+    Html(GraphiQLSource::build().finish())
+}
+
+async fn graphql_handler(State(schema): State<FullSchema>, req: GraphQLRequest) -> GraphQLResponse {
+    let req = req.into_inner();
+    // req = req.data();
+
+    schema.execute(req).await.into()
+}
+
+pub fn make_app() -> Router {
+    let schema = Schema::build(RootQuery, EmptyMutation, EmptySubscription).finish();
+    // std::fs::write("schemas/loader.graphql", schema.sdl()).unwrap();
+
+    Router::new()
+        .route("/", get(graphiql).post(graphql_handler))
+        .with_state(schema)
+}
