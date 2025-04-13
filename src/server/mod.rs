@@ -6,8 +6,12 @@ use axum::extract::State;
 use axum::response::{Html, IntoResponse};
 use axum::routing::get;
 
+mod dataloader;
+mod loaders;
 mod schema;
 
+use dataloader::DataLoader;
+use loaders::{LoadBooks, LoadSummaries};
 use schema::Library;
 
 type FullSchema = Schema<Library, EmptyMutation, EmptySubscription>;
@@ -17,8 +21,10 @@ async fn graphiql() -> impl IntoResponse {
 }
 
 async fn graphql_handler(State(schema): State<FullSchema>, req: GraphQLRequest) -> GraphQLResponse {
-    let req = req.into_inner();
-    // req = req.data();
+    let req = req
+        .into_inner()
+        .data(DataLoader::new(LoadBooks))
+        .data(DataLoader::new(LoadSummaries));
 
     schema.execute(req).await.into()
 }

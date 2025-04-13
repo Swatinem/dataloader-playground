@@ -1,7 +1,12 @@
+use std::collections::HashMap;
+
 use async_graphql::{ComplexObject, Context, Object, SimpleObject};
 use tokio::task::yield_now;
 
 use crate::datamodel::{ALL_AUTHORS, ALL_BOOKS};
+
+use super::dataloader::{BatchLoader, DataLoader};
+use super::loaders::{LoadBooks, LoadSummaries, Loaders as _};
 
 pub struct Library;
 
@@ -26,44 +31,26 @@ impl Library {
 #[derive(SimpleObject)]
 #[graphql(complex)]
 pub struct Author {
-    name: &'static str,
-    born: &'static str,
+    pub name: &'static str,
+    pub born: &'static str,
 }
 
 #[ComplexObject]
 impl Author {
-    async fn books(&self, _ctx: &Context<'_>) -> Vec<Book> {
-        println!("starting to resolve Books by `{}`", self.name);
-        yield_now().await;
-        println!("actually resolving Books by `{}`", self.name);
-
-        let books = ALL_BOOKS
-            .iter()
-            .filter(|b| b.author == self.name)
-            .map(|b| Book { title: b.title })
-            .collect();
-
-        println!("finished resolving Books by `{}`", self.name);
-        books
+    async fn books(&self, ctx: &Context<'_>) -> Vec<Book> {
+        ctx.load_books(self.name).await
     }
 }
 
-#[derive(SimpleObject)]
+#[derive(Clone, SimpleObject)]
 #[graphql(complex)]
 pub struct Book {
-    title: &'static str,
+    pub title: &'static str,
 }
 
 #[ComplexObject]
 impl Book {
-    async fn summary(&self, _ctx: &Context<'_>) -> String {
-        println!("starting to resolve summary for `{}`", self.title);
-        yield_now().await;
-        println!("actually resolving summary for `{}`", self.title);
-
-        let summary = "Don’t know, read it yourself!".into();
-
-        println!("finished resolving summary for `{}`", self.title);
-        summary
+    async fn summary(&self, ctx: &Context<'_>) -> String {
+        ctx.load_summary(self.title).await
     }
 }
