@@ -20,13 +20,19 @@ async fn graphiql() -> impl IntoResponse {
     Html(GraphiQLSource::build().finish())
 }
 
+#[axum::debug_handler]
 async fn graphql_handler(State(schema): State<FullSchema>, req: GraphQLRequest) -> GraphQLResponse {
+    let load_books = DataLoader::new(LoadBooks);
+    let load_summaries = DataLoader::new(LoadSummaries);
     let req = req
         .into_inner()
-        .data(DataLoader::new(LoadBooks))
-        .data(DataLoader::new(LoadSummaries));
+        .data(load_books.clone())
+        .data(load_summaries.clone());
 
-    schema.execute(req).await.into()
+    let execute = schema.execute(req);
+    // execute.await.into()
+    let wrapped = load_summaries.wrap(load_books.wrap(execute));
+    wrapped.await.into()
 }
 
 pub fn make_app() -> Router {

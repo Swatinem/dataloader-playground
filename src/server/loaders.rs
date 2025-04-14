@@ -31,7 +31,7 @@ impl BatchLoader for LoadBooks {
     type K = &'static str;
     type V = Vec<Book>;
 
-    async fn load_batch(&mut self, keys: &[Self::K]) -> HashMap<Self::K, Self::V> {
+    async fn load_batch(&mut self, keys: Vec<Self::K>) -> HashMap<Self::K, Self::V> {
         let debug_keys = keys.join("`, `");
         println!("actually resolving Books by `{debug_keys}`");
 
@@ -55,7 +55,7 @@ impl BatchLoader for LoadSummaries {
     type K = &'static str;
     type V = String;
 
-    async fn load_batch(&mut self, keys: &[Self::K]) -> HashMap<Self::K, Self::V> {
+    async fn load_batch(&mut self, keys: Vec<Self::K>) -> HashMap<Self::K, Self::V> {
         let debug_keys = keys.join("`, `");
         println!("actually resolving summaries for `{debug_keys}`");
 
