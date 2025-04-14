@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::future::poll_fn;
 use std::hash::Hash;
 use std::marker::PhantomData;
-use std::pin::Pin;
+use std::pin::{Pin, pin};
 use std::sync::{Arc, Mutex};
 use std::task::{self, Poll, Waker};
 
@@ -51,117 +52,92 @@ where
     }
 
     pub fn load(&self, key: B::K) -> impl Future<Output = B::V> {
-        LoadFuture::Pending { loader: self, key }
+        poll_fn(move |cx| {
+            let mut inner = self.inner.lock().unwrap();
+
+            let wakers = match inner.values.get_mut(&key) {
+                Some(Entry::Ready(v)) => {
+                    return Poll::Ready(v.clone());
+                }
+                Some(Entry::Requested(wakers)) => wakers,
+                None => inner.pending_keys.entry(key.clone()).or_insert_with(|| {
+                    println!("starting to resolve related objects for `{key:?}`");
+                    vec![]
+                }),
+            };
+
+            wakers.push(cx.waker().clone());
+            Poll::Pending
+        })
     }
 
     pub fn wrap<O>(&self, fut: impl Future<Output = O>) -> impl Future<Output = O> {
-        WrapFuture {
-            loader: self,
-            future: fut,
-            currently_loading: None,
-        }
-    }
-}
+        async move {
+            // FIXME: Rust forces us to name this type explicitly, and we cannot use `impl Future` here
+            // because that is not implemented yet (see <https://github.com/rust-lang/rust/issues/63065>).
+            // We thus have to resort to a `dyn Future`, as we currently can’t name the future returned by `B::load()`
+            // either, though something like "return type notation".
+            let mut currently_loading: Option<
+                Pin<Box<dyn Future<Output = HashMap<B::K, B::V>> + Send>>,
+            > = None;
 
-struct WrapFuture<'l, B: BatchLoader, F> {
-    loader: &'l DataLoader<B>,
-    future: F,
-    currently_loading: Option<Pin<Box<dyn Future<Output = HashMap<B::K, B::V>> + Send + Sync>>>,
-}
+            let mut fut = pin!(fut);
+            poll_fn(move |cx| {
+                if let Some(currently_loading_fut) = &mut currently_loading {
+                    match currently_loading_fut.as_mut().poll(cx) {
+                        Poll::Ready(v) => {
+                            let mut inner = self.inner.lock().unwrap();
 
-impl<'l, B: BatchLoader, F: Future> Future for WrapFuture<'l, B, F>
-where
-    B::K: Debug,
-{
-    type Output = F::Output;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
-        let slf = unsafe { self.get_unchecked_mut() };
-        if let Some(currently_loading) = &mut slf.currently_loading {
-            let currently_loading = currently_loading.as_mut();
-            match currently_loading.poll(cx) {
-                Poll::Ready(v) => {
-                    let mut inner = slf.loader.inner.lock().unwrap();
-
-                    for (k, v) in v {
-                        if let Some(Entry::Requested(wakers)) =
-                            inner.values.insert(k, Entry::Ready(v))
-                        {
-                            for w in wakers {
-                                w.wake();
+                            // Wake all the `load` calls waiting on this batch
+                            for (k, v) in v {
+                                if let Some(Entry::Requested(wakers)) =
+                                    inner.values.insert(k, Entry::Ready(v))
+                                {
+                                    for w in wakers {
+                                        w.wake();
+                                    }
+                                }
                             }
+
+                            currently_loading = None;
                         }
+                        Poll::Pending => return Poll::Pending,
                     }
-
-                    slf.currently_loading = None;
-                }
-                Poll::Pending => return Poll::Pending,
-            }
-        }
-
-        let future = unsafe { Pin::new_unchecked(&mut slf.future) };
-        let res = future.poll(cx);
-        if res.is_pending() {
-            let mut inner = slf.loader.inner.lock().unwrap();
-
-            if !inner.pending_keys.is_empty() {
-                let mut keys = Vec::with_capacity(inner.pending_keys.len());
-                for (k, v) in std::mem::take(&mut inner.pending_keys) {
-                    keys.push(k.clone());
-                    inner.values.insert(k, Entry::Requested(v));
                 }
 
-                let load_future = unsafe {
-                    std::mem::transmute::<
-                        Pin<Box<dyn Future<Output = _>>>,
-                        Pin<Box<dyn Future<Output = _> + Send + Sync>>,
-                    >(Box::pin(inner.load_batch.load_batch(keys)))
-                };
-                slf.currently_loading = Some(load_future);
+                let res = fut.as_mut().poll(cx);
+                if res.is_pending() {
+                    // We have polled the inner future once, during which it may have registered more
+                    // keys to load.
+                    let mut inner = self.inner.lock().unwrap();
 
-                cx.waker().wake_by_ref();
-            }
-        }
-        res
-    }
-}
+                    if !inner.pending_keys.is_empty() {
+                        let mut keys = Vec::with_capacity(inner.pending_keys.len());
+                        for (k, v) in std::mem::take(&mut inner.pending_keys) {
+                            keys.push(k.clone());
+                            inner.values.insert(k, Entry::Requested(v));
+                        }
 
-enum LoadFuture<'l, B: BatchLoader> {
-    Pending {
-        loader: &'l DataLoader<B>,
-        key: B::K,
-    },
-    Consumed,
-}
+                        // FIXME: As have to resort to `dyn Future` for reasons explained above, and we have no way
+                        // currently (without "return type notation") to require `B::load()` to return a `Send` future,
+                        // we will just use an unsafe transmute, because YOLO.
+                        let load_future: Pin<Box<dyn Future<Output = _> + Send>> = unsafe {
+                            std::mem::transmute::<
+                                Pin<Box<dyn Future<Output = _>>>,
+                                Pin<Box<dyn Future<Output = _> + Send>>,
+                            >(Box::pin(
+                                inner.load_batch.load_batch(keys),
+                            ))
+                        };
+                        currently_loading = Some(load_future);
 
-impl<'l, B: BatchLoader> Future for LoadFuture<'l, B>
-where
-    B::K: Debug,
-{
-    type Output = B::V;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
-        let slf = unsafe { self.get_unchecked_mut() };
-        match slf {
-            LoadFuture::Pending { loader, key } => {
-                let mut inner = loader.inner.lock().unwrap();
-
-                let wakers = match inner.values.get_mut(key) {
-                    Some(Entry::Ready(v)) => {
-                        *slf = LoadFuture::Consumed;
-                        return Poll::Ready(v.clone());
+                        // Wake immediately, to instruct the runtime to call `poll` again.
+                        cx.waker().wake_by_ref();
                     }
-                    Some(Entry::Requested(wakers)) => wakers,
-                    None => inner.pending_keys.entry(key.clone()).or_insert_with(|| {
-                        println!("starting to resolve related objects for `{key:?}`");
-                        vec![]
-                    }),
-                };
-
-                wakers.push(cx.waker().clone());
-                Poll::Pending
-            }
-            LoadFuture::Consumed => panic!("`LoadFuture` polled after returning `Poll::Ready`"),
+                }
+                res
+            })
+            .await
         }
     }
 }
