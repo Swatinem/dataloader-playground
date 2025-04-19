@@ -32,6 +32,33 @@ impl<B: BatchLoader> Clone for DataLoader<B> {
     }
 }
 
+pub struct LoadFuture<'l, B: BatchLoader> {
+    loader: &'l DataLoader<B>,
+    key: B::K,
+}
+
+impl<'l, B: BatchLoader> Future for LoadFuture<'l, B>
+where
+    B::K: Debug,
+{
+    type Output = B::V;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
+        let mut inner = self.loader.inner.lock().unwrap();
+
+        // Check the resolved value, and return it if it was resolved already
+        if let Some(v) = inner.resolved_values.get(&self.key) {
+            return Poll::Ready(v.clone());
+        }
+
+        // Otherwise, register the requested key, and its `Waker`
+        println!("starting to resolve related objects for `{:?}`", self.key);
+        inner.requested_keys.push(self.key.clone());
+        inner.pending_wakers.push(cx.waker().clone());
+        Poll::Pending
+    }
+}
+
 impl<B: BatchLoader> DataLoader<B>
 where
     B::K: Debug,
@@ -48,21 +75,8 @@ where
         }
     }
 
-    pub fn load(&self, key: B::K) -> impl Future<Output = B::V> {
-        poll_fn(move |cx| {
-            let mut inner = self.inner.lock().unwrap();
-
-            // Check the resolved value, and return it if it was resolved already
-            if let Some(v) = inner.resolved_values.get(&key) {
-                return Poll::Ready(v.clone());
-            }
-
-            // Otherwise, register the requested key, and its `Waker`
-            println!("starting to resolve related objects for `{key:?}`");
-            inner.requested_keys.push(key.clone());
-            inner.pending_wakers.push(cx.waker().clone());
-            Poll::Pending
-        })
+    pub fn load(&self, key: B::K) -> LoadFuture<B> {
+        LoadFuture { loader: self, key }
     }
 
     pub async fn wrap<O>(&self, fut: impl Future<Output = O>) -> O {
