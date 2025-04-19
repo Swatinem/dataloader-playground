@@ -14,15 +14,11 @@ pub trait BatchLoader {
     async fn load_batch(&mut self, keys: Vec<Self::K>) -> HashMap<Self::K, Self::V>;
 }
 
-enum Entry<V> {
-    Requested(Vec<Waker>),
-    Ready(V),
-}
-
 struct LoaderInner<B: BatchLoader> {
     load_batch: B,
-    resolved_values: HashMap<B::K, Entry<B::V>>,
-    requested_keys: HashMap<B::K, Vec<Waker>>,
+    resolved_values: HashMap<B::K, B::V>,
+    requested_keys: Vec<B::K>,
+    pending_wakers: Vec<Waker>,
 }
 
 pub struct DataLoader<B: BatchLoader> {
@@ -45,6 +41,7 @@ where
             load_batch,
             resolved_values: Default::default(),
             requested_keys: Default::default(),
+            pending_wakers: Default::default(),
         };
         Self {
             inner: Arc::new(Mutex::new(inner)),
@@ -55,18 +52,15 @@ where
         poll_fn(move |cx| {
             let mut inner = self.inner.lock().unwrap();
 
-            let wakers = match inner.resolved_values.get_mut(&key) {
-                Some(Entry::Ready(v)) => {
-                    return Poll::Ready(v.clone());
-                }
-                Some(Entry::Requested(wakers)) => wakers,
-                None => inner.requested_keys.entry(key.clone()).or_insert_with(|| {
-                    println!("starting to resolve related objects for `{key:?}`");
-                    vec![]
-                }),
-            };
+            // Check the resolved value, and return it if it was resolved already
+            if let Some(v) = inner.resolved_values.get(&key) {
+                return Poll::Ready(v.clone());
+            }
 
-            wakers.push(cx.waker().clone());
+            // Otherwise, register the requested key, and its `Waker`
+            println!("starting to resolve related objects for `{key:?}`");
+            inner.requested_keys.push(key.clone());
+            inner.pending_wakers.push(cx.waker().clone());
             Poll::Pending
         })
     }
@@ -84,18 +78,14 @@ where
         poll_fn(move |cx| {
             if let Some(currently_loading_fut) = &mut currently_loading {
                 match currently_loading_fut.as_mut().poll(cx) {
-                    Poll::Ready(v) => {
+                    Poll::Ready(resolved_values) => {
                         let mut inner = self.inner.lock().unwrap();
 
+                        inner.resolved_values.extend(resolved_values);
+
                         // Wake all the `load` calls waiting on this batch
-                        for (k, v) in v {
-                            if let Some(Entry::Requested(wakers)) =
-                                inner.resolved_values.insert(k, Entry::Ready(v))
-                            {
-                                for w in wakers {
-                                    w.wake();
-                                }
-                            }
+                        for waker in inner.pending_wakers.drain(..) {
+                            waker.wake();
                         }
 
                         currently_loading = None;
@@ -110,25 +100,22 @@ where
                 // keys to load.
                 let mut inner = self.inner.lock().unwrap();
 
-                if !inner.requested_keys.is_empty() {
-                    let mut keys = Vec::with_capacity(inner.requested_keys.len());
-                    for (k, v) in std::mem::take(&mut inner.requested_keys) {
-                        keys.push(k.clone());
-                        inner.resolved_values.insert(k, Entry::Requested(v));
-                    }
-
-                    // FIXME: As have to resort to `dyn Future` for reasons explained above, and we have no way
+                let requested_keys = std::mem::take(&mut inner.requested_keys);
+                if !requested_keys.is_empty() {
+                    // FIXME: As we have to resort to `dyn Future` for reasons explained above, and we have no way
                     // currently (without "return type notation") to require `B::load()` to return a `Send` future,
                     // we will just use an unsafe transmute, because YOLO.
                     let load_future: Pin<Box<dyn Future<Output = _> + Send>> = unsafe {
                         std::mem::transmute::<
                             Pin<Box<dyn Future<Output = _>>>,
                             Pin<Box<dyn Future<Output = _> + Send>>,
-                        >(Box::pin(inner.load_batch.load_batch(keys)))
+                        >(Box::pin(
+                            inner.load_batch.load_batch(requested_keys),
+                        ))
                     };
                     currently_loading = Some(load_future);
 
-                    // Wake immediately, to instruct the runtime to call `poll` again.
+                    // Wake immediately, to instruct the runtime to call `poll` again right away.
                     cx.waker().wake_by_ref();
                 }
             }
