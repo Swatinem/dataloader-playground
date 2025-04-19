@@ -20,9 +20,9 @@ enum Entry<V> {
 }
 
 struct LoaderInner<B: BatchLoader> {
-    values: HashMap<B::K, Entry<B::V>>,
-    pending_keys: HashMap<B::K, Vec<Waker>>,
     load_batch: B,
+    resolved_values: HashMap<B::K, Entry<B::V>>,
+    requested_keys: HashMap<B::K, Vec<Waker>>,
 }
 
 pub struct DataLoader<B: BatchLoader> {
@@ -43,8 +43,8 @@ where
     pub fn new(load_batch: B) -> Self {
         let inner = LoaderInner {
             load_batch,
-            values: Default::default(),
-            pending_keys: Default::default(),
+            resolved_values: Default::default(),
+            requested_keys: Default::default(),
         };
         Self {
             inner: Arc::new(Mutex::new(inner)),
@@ -55,12 +55,12 @@ where
         poll_fn(move |cx| {
             let mut inner = self.inner.lock().unwrap();
 
-            let wakers = match inner.values.get_mut(&key) {
+            let wakers = match inner.resolved_values.get_mut(&key) {
                 Some(Entry::Ready(v)) => {
                     return Poll::Ready(v.clone());
                 }
                 Some(Entry::Requested(wakers)) => wakers,
-                None => inner.pending_keys.entry(key.clone()).or_insert_with(|| {
+                None => inner.requested_keys.entry(key.clone()).or_insert_with(|| {
                     println!("starting to resolve related objects for `{key:?}`");
                     vec![]
                 }),
@@ -90,7 +90,7 @@ where
                         // Wake all the `load` calls waiting on this batch
                         for (k, v) in v {
                             if let Some(Entry::Requested(wakers)) =
-                                inner.values.insert(k, Entry::Ready(v))
+                                inner.resolved_values.insert(k, Entry::Ready(v))
                             {
                                 for w in wakers {
                                     w.wake();
@@ -110,11 +110,11 @@ where
                 // keys to load.
                 let mut inner = self.inner.lock().unwrap();
 
-                if !inner.pending_keys.is_empty() {
-                    let mut keys = Vec::with_capacity(inner.pending_keys.len());
-                    for (k, v) in std::mem::take(&mut inner.pending_keys) {
+                if !inner.requested_keys.is_empty() {
+                    let mut keys = Vec::with_capacity(inner.requested_keys.len());
+                    for (k, v) in std::mem::take(&mut inner.requested_keys) {
                         keys.push(k.clone());
-                        inner.values.insert(k, Entry::Requested(v));
+                        inner.resolved_values.insert(k, Entry::Requested(v));
                     }
 
                     // FIXME: As have to resort to `dyn Future` for reasons explained above, and we have no way
