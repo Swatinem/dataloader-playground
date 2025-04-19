@@ -30,7 +30,6 @@ async fn graphql_handler(State(schema): State<FullSchema>, req: GraphQLRequest) 
         .data(load_summaries.clone());
 
     let execute = schema.execute(req);
-    // execute.await.into()
     let wrapped = load_summaries.wrap(load_books.wrap(execute));
     wrapped.await.into()
 }

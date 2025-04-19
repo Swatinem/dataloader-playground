@@ -11,7 +11,10 @@ pub trait BatchLoader {
     type K: Hash + Eq + Clone;
     type V: Clone;
 
-    async fn load_batch(&mut self, keys: Vec<Self::K>) -> HashMap<Self::K, Self::V>;
+    fn load_batch(
+        &mut self,
+        keys: Vec<Self::K>,
+    ) -> impl Future<Output = HashMap<Self::K, Self::V>> + Send + 'static;
 }
 
 struct LoaderInner<B: BatchLoader> {
@@ -82,8 +85,7 @@ where
     pub async fn wrap<O>(&self, fut: impl Future<Output = O>) -> O {
         // FIXME: Rust forces us to name this type explicitly, and we cannot use `impl Future` here
         // because that is not implemented yet (see <https://github.com/rust-lang/rust/issues/63065>).
-        // We thus have to resort to a `dyn Future`, as we currently can’t name the future returned by `B::load()`
-        // either, though something like "return type notation".
+        // We thus have to resort to a `dyn Future`, as we currently can’t name the future returned by `B::load()`.
         let mut currently_loading: Option<
             Pin<Box<dyn Future<Output = HashMap<B::K, B::V>> + Send>>,
         > = None;
@@ -116,18 +118,7 @@ where
 
                 let requested_keys = std::mem::take(&mut inner.requested_keys);
                 if !requested_keys.is_empty() {
-                    // FIXME: As we have to resort to `dyn Future` for reasons explained above, and we have no way
-                    // currently (without "return type notation") to require `B::load()` to return a `Send` future,
-                    // we will just use an unsafe transmute, because YOLO.
-                    let load_future: Pin<Box<dyn Future<Output = _> + Send>> = unsafe {
-                        std::mem::transmute::<
-                            Pin<Box<dyn Future<Output = _>>>,
-                            Pin<Box<dyn Future<Output = _> + Send>>,
-                        >(Box::pin(
-                            inner.load_batch.load_batch(requested_keys),
-                        ))
-                    };
-                    currently_loading = Some(load_future);
+                    currently_loading = Some(Box::pin(inner.load_batch.load_batch(requested_keys)));
 
                     // Wake immediately, to instruct the runtime to call `poll` again right away.
                     cx.waker().wake_by_ref();
